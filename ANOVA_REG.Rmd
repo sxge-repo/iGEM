@@ -1,0 +1,213 @@
+---
+title: 'Statistical Analysis of Plastic Degradation: Effects of Substrate and Concentration
+  Levels'
+output:
+  pdf_document: default
+  html_notebook: default
+---
+###1. LOAD THE PACKAGES 
+
+```{r}
+library(dplyr)
+library(car)
+library(ggplot2)
+library(readxl)
+```
+
+###2. LOAD & CLEAN THE DATASET
+```{r}
+#Load the dataset
+data <- read_excel("Data for graph MMEAA .xlsx", 
+    sheet = "Test  run regression plt")
+head(data)
+
+#Rename Y, select needed columns, turn into factor
+clean_data <- data %>% 
+  rename(y = `y= uM/min`) %>% 
+  select(y, sub_conc_level, substrate) %>% 
+  mutate(sub_conc_level = as.factor(sub_conc_level),
+         substrate = as.factor(substrate))
+
+glimpse(clean_data)
+
+# Group the data by 'substrate' and calculate the mean of 'y' for each group
+means_by_substrate <- clean_data %>%
+  group_by(substrate) %>%
+  summarize(mean_y = mean(y))
+means_by_substrate
+```
+
+###3. EDA (Exploratory Data Analysis)
+```{r}
+# Boxplot for EDA
+ggplot(clean_data, aes(x = substrate, y = y, fill = factor(sub_conc_level))) +
+  geom_boxplot() +
+  labs(x = "Substrate", y = "Degradation (uM/min)", title = "Boxplot of Degradation by Substrate and Concentration")
+
+# Create a boxplot for each group
+ggplot(clean_data, aes(x = substrate, y = y, fill = substrate)) +
+  geom_boxplot() +
+  facet_wrap(~sub_conc_level)
+
+#Dotplot 
+ggplot(clean_data, aes(x = sub_conc_level, y = y, color = substrate)) +
+  geom_point()
+```
+###4. BALANCED VS UNBALANCED DESIGN
+```{r}
+#Balanced vs Unbalanced Design? 
+table(clean_data$sub_conc_level, clean_data$substrate)
+```
+Since we have unbalanced design (i.e. unequal numbers of subjects in each group). There are fundamentally 3 ways to run ANOVA in an unbalanced design (Type I, II, or III). The recommended method is Type III. 
+
+###5. TWOWAY ANOVA
+```{r}
+#Anova
+anova_result <- aov(y ~ substrate * sub_conc_level, data = clean_data)
+Anova(anova_result, type = "III")
+``` 
+Substrate Type Effect: The main effect of substrate type was found to be statistically significant (F(1, 53) = 23.93, p < 0.001), indicating that the choice of substrate significantly influenced the rate of plastic degradation. Specifically, it suggests that different substrate types had a notable impact on the 'y' variable.
+
+Substrate Concentration Level Effect: The main effect of substrate concentration level was not statistically significant (F(1, 53) = 0.18, p = 0.6694). This suggests that varying the concentration levels within the tested range did not have a significant influence on the rate of plastic degradation.
+
+Interaction Effect: The interaction effect between substrate type and concentration level was highly significant (F(1, 53) = 45.22, p < 0.001). This implies that the combined influence of both substrate type and concentration level had a substantial impact on 'y' and that the relationship between these factors was not additive.
+
+###6. CHECK ANOVE ASSUMPTIONS: TEST VALIDITY
+```{r}
+#Residual Plot - Homogeneity of variances 
+y.res <- residuals(anova_result)
+y.fitted <- fitted.values(anova_result)
+plot(y.fitted, y.res, xlab = "fitted values", ylab ="residuals")
+abline(h = 0, col = "red", lty = 2)
+
+#Levene's test - Homogeneity of variances 
+leveneTest(y ~ substrate * sub_conc_level, data = clean_data)
+
+#Probability Plot 
+y.stdres <- rstandard(anova_result)
+qqnorm(y.stdres, main = "Normal Probability Plot")
+qqline(y.stdres, col = 2)
+
+#Interaction Plot
+ggplot(clean_data, aes(x = sub_conc_level, y = y, color = substrate, group = substrate)) +
+  stat_summary(fun.y = mean, geom = "point") +
+  stat_summary(fun.y = mean, geom = "line")
+```
+
+Residual Plot & Levene's Test: testing homoscedasticity, also known as constant variance.Homoscedasticity means that the variance of the residuals (the differences between observed values and predicted values) is consistent across all levels or groups of the independent variable(s). The spread around 0 is uneven in horizontal sense and p-value for the Levene's Test (0.001167) <0.05, reject the null, there's sufficient evidence to conclude that at least one combination of substrate and sub_conc_level has a different variance compared to the others. -> Homoscedasticity is violated 
+
+Probability Plot: This plot can be used to assess whether the standardized residuals follow a normal distribution. If the points closely follow the reference line, it suggests that the residuals are approximately normally distributed. Our case, it is not.-> Residuals ~ N(0, constant var) is violated.  
+
+Interaction Plot: we interpret them by looking to see if there is any significant difference in the slopes of the lines, or lines that cross because their slopes have opposite signs. Those would all be indications of an interaction effect. Here it is appear no interaction.
+
+###5. IDENTIFY & DROP OUTLIERS 
+```{r}
+clean_data <- clean_data %>%
+  group_by(substrate, sub_conc_level) %>%
+  mutate(z_score = scale(y))
+
+# Identify outliers with z-scores
+outliers <- clean_data[abs(clean_data$z_score) > 2, ]
+outliers
+```
+Since the assumptions of Anova are not met and no outliers can be dropped. Three viable options we can go from here: 
+  *Transform our variables 
+  *Using a non-parametric test like the Kruskal-Wallist test, which does not assume honoscedasticity or normality. This test is suitable for comparing groups when ANOVA assumptions are violated.
+  *Bootstrapping: a small sample size or non-normal residuals, you can use bootstrapping to resample your data and calculate confidence intervals. This approach doesn't rely on parametric assumptions and can provide robust results.
+
+###7. TRANSFORM Y
+```{r}
+# Log-transform the response variable
+clean_data$y_transformed <- log(clean_data$y)
+
+# Levene's test for homogeneity of variances
+leveneTest(y_transformed ~ substrate * sub_conc_level, data = clean_data)
+
+# Probability plot for normality
+y_stdres <- rstandard(aov(y_transformed ~ substrate * sub_conc_level, data = clean_data))
+qqnorm(y_stdres, main = "Normal Probability Plot")
+qqline(y_stdres, col = 2)
+
+#Interaction Plot
+ggplot(clean_data, aes(x = sub_conc_level, y = y_transformed, color = substrate, group = substrate)) +
+  stat_summary(fun.y = mean, geom = "point") +
+  stat_summary(fun.y = mean, geom = "line")
+```
+After transforming y to log(y), the p-value of the Levene's Test (0.614) > 0.05, we fail reject the null hypothesis (the variances are equal across groups). This suggests that there are no significant variance differences among groups, meeting the assumption of homoscedasticity.
+
+Probability Plot: the points mostly stay around the line, except for some extreme points at the two tails, suggesting that while the residuals are approximately normally distributed overall. This indicates that the assumption of normality of residuals is reasonably met.
+
+###8. TWOWAY ANOVA USING LOG(Y)
+```{r}
+# Run ANOVA with transformed data
+anova_result_transformed <- aov(y_transformed ~ substrate * sub_conc_level, data = clean_data)
+
+# Summary of ANOVA results
+summary(anova_result_transformed)
+
+```
+
+In the transformed dataset, the two independent variables, 'substrate' and 'sub_conc_level,' along with their interaction, have a significant effect on the dependent variable 'y_transformed' as evidenced by the extremely low p-values (all < 2e-16). This indicates that the type of substrate, concentration levels, and their interaction all play a significant role in explaining the variability in the transformed 'y' values. Additionally, the residuals show low variability within groups, supporting the assumptions of homoscedasticity and normality, further validating the results.
+
+Interesting observation: While the interaction plot shows that the lines for 'pNOB' and 'NPO' never cross, indicating an absence of a qualitative interaction (where the effect of one variable depends on the level of another), ANOVA's significance of the interaction term suggests that there is still a quantitative interaction present.
+
+In other words, while the two substrates may not have fundamentally different effects on the outcome, the strength or magnitude of their effects may vary depending on the concentration levels. This implies that the interaction between 'substrate' and 'sub_conc_level' may not change the nature of the relationship between these variables, but it does affect the extent or degree to which they influence the outcome 'y_transformed.' This is an important finding and highlights the importance of considering both qualitative and quantitative aspects of interactions in your analysis.
+
+###9. POST-HOC TEST: 
+```{r}
+# Load the necessary library for post-hoc tests
+library(TukeyC)
+
+# Perform Tukey's HSD post-hoc test on Substrate
+posthoc <- TukeyC::TukeyC(anova_result_transformed)
+summary(posthoc)
+
+# Perform Tukey's HSD post-hoc test on sub_conc_level
+posthoc_sub_conc <- TukeyHSD(anova_result_transformed, which = "sub_conc_level")
+print(posthoc_sub_conc)
+
+
+```
+
+Findings: Here are the pairs of concentration levels that are NOT significantly different from each other (adj p-value >0.05):
+(0.05 & 0.025)
+(0.1 & 0.025)
+(0.2 & 0.025)            
+(0.1 & 0.05)           
+(0.2 & 0.05)            
+(0.2 & 0.1)
+(0.003125 & 0.0015625)
+This means that when it comes to how these concentrations affect the outcome we're studying, they are quite similar and don't stand out as significantly different from each other.
+
+The concentration level with the highest mean (if significantly different) can be considered the "best" in terms of achieving the highest y value, indicating better degradation. And that is "0.2", this suggests that a concentration of 0.2 is likely the most effective in achieving a higher log(y) value, essentially higher y value, indicating better degradation.
+
+###10. MULTIPLE REGRESSION
+```{r}
+# Create dummy variables for categorical variables
+dummy_data <- model.matrix(~ substrate + sub_conc_level, data = clean_data)
+
+# Create the multiple regression model
+lm_model <- lm(y ~ dummy_data, data = clean_data)
+
+# Summarize the regression results
+summary(lm_model)
+
+# Regression with interaction term 
+lm_model_interaction <- lm(y ~ substrate * sub_conc_level, data = clean_data)
+summary(lm_model_interaction)
+```
+Regression without Interaction Term (It assesses the main effects of each variable on the plastic degradation rate): The overall model fits the data reasonably well, with an adjusted R-squared of 0.6894. This value indicates that about 68.94% of the variation in plastic degradation can be explained by the combination of substrate and concentration level.
+
+Main Effects:
+
+dummy_datasubstratepNOB is statistically significant: the coefficient 107.291 uM/min means using pNOB results in an increase of 107.291 uM/min in the degradation rate (y) compared to NPO. 
+
+sub_conc_level: 
+* 0.003125, 0.00625, 0.0125: are not statistically significant, thus no effect on the degradation rate (y)
+* 0.025, 0.05. 0.1, 0.2: are statiscically significant, 0.05 is the most effective concentration level because it results in the highest increase in y among the tested levels (97.548 uM/min)
+
+Regression with Interaction Term (It captures the joint effects of both variables on the plastic degradation rate): The model's overall fit is excellent, with an Adjusted R-squared value of 0.9909. This indicates that the model explains approximately 99.09% of the variance in the plastic degradation rate.
+
+
+
+
